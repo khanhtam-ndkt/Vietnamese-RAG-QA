@@ -3,7 +3,7 @@
 This project implements a Retrieval-Augmented Generation (RAG) system, focusing on efficient indexing, retrieval, and robust evaluation metrics to ensure high-quality output.
 
 **Stack:** Python · ChromaDB · BM25 · RRF · Cross-Encoder · Ollama · Flask · Streamlit  
-**Dataset:** UIT-ViQuAD 2.0 (~4,101 contexts → ~21,155 chunks)  
+**Dataset:** UIT-ViQuAD 2.0
 **Targets:** Recall@10 ≥ 0.9, nDCG@10 ≥ 0.9
 
 ---
