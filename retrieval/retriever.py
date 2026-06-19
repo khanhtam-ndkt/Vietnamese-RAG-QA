@@ -1,40 +1,31 @@
-"""
-retrieval/retriever.py
-Hybrid retriever: Dense (ChromaDB) + Sparse (BM25) → RRF fusion → Cross-Encoder rerank
-"""
-
 import os
 import pickle
 import sys
+import torch
+import torch.nn.functional as F
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from typing import Optional
 import chromadb
 import numpy as np
-from sentence_transformers import SentenceTransformer, CrossEncoder
-from underthesea import word_tokenize  # Added for Vietnamese word segmentation
+from sentence_transformers import CrossEncoder
+from transformers import AutoTokenizer, AutoModel
+from underthesea import word_tokenize
 
 from config import (
-    EMBEDDING_MODEL,
-    EMBEDDING_DEVICE,
-    CHROMA_PERSIST_DIR,
-    CHROMA_COLLECTION,
-    BM25_INDEX_PATH,
-    DENSE_TOP_K,
-    BM25_TOP_K,
-    RRF_K,
-    HYBRID_TOP_K,
-    RERANKER_MODEL,
-    RERANKER_DEVICE,
-    RERANK_TOP_K,
+    EMBEDDING_MODEL, EMBEDDING_DEVICE, CHROMA_PERSIST_DIR, CHROMA_COLLECTION,
+    BM25_INDEX_PATH, DENSE_TOP_K, BM25_TOP_K, RRF_K, HYBRID_TOP_K,
+    RERANKER_MODEL, RERANKER_DEVICE, RERANK_TOP_K,
 )
-
 
 class HybridRetriever:
     def __init__(self):
-        print("[Retriever] Loading embedding model …")
-        # Added trust_remote_code=True for GTE model support
-        self.embedder = SentenceTransformer(EMBEDDING_MODEL, device=EMBEDDING_DEVICE, trust_remote_code=True)
+        print("[Retriever] Loading embedding model (Raw Transformers) …")
+        self.tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL, trust_remote_code=True)
+        self.embed_model = AutoModel.from_pretrained(
+            EMBEDDING_MODEL, trust_remote_code=True, ignore_mismatched_sizes=True,
+        ).to(EMBEDDING_DEVICE)
+        self.embed_model.eval()
 
         print("[Retriever] Connecting to ChromaDB …")
         self.chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
@@ -49,21 +40,37 @@ class HybridRetriever:
         self.bm25_metadatas = bm25_payload["metadatas"]
 
         print("[Retriever] Loading Cross-Encoder reranker …")
-        self.reranker = CrossEncoder(RERANKER_MODEL, device=RERANKER_DEVICE)
+        self.reranker = CrossEncoder(RERANKER_MODEL, device=RERANKER_DEVICE, max_length=512)
 
         print("[Retriever] Ready ✓")
 
-    # ── Dense retrieval ───────────────────────────────────────────────────────
-    def _dense_search(self, query: str, top_k: int = DENSE_TOP_K) -> list[dict]:
-        # GTE-multilingual requires a specific instruction prefix for asymmetric queries
-        query_prefix = "Represent this sentence for searching relevant passages: "
-        prefixed_query = query_prefix + query
+    def _encode_query(self, query: str):
+        encoded = self.tokenizer(
+            [query], padding=True, truncation=True, max_length=512, return_tensors="pt"
+        ).to(EMBEDDING_DEVICE)
         
-        query_emb = self.embedder.encode([prefixed_query], device=EMBEDDING_DEVICE)[0].tolist()
+        seq_len = encoded["input_ids"].shape[1]
+        encoded["position_ids"] = torch.arange(seq_len, dtype=torch.long, device=EMBEDDING_DEVICE).unsqueeze(0).expand(1, -1)
+        
+        with torch.no_grad():
+            out = self.embed_model(**encoded, unpad_inputs=False)  
+            
+        hidden_states = torch.nan_to_num(out.last_hidden_state, nan=0.0)
+        mask = encoded["attention_mask"].unsqueeze(-1).expand(hidden_states.size()).float()
+        sum_embeddings = torch.sum(hidden_states * mask, 1)
+        sum_mask = torch.clamp(mask.sum(1), min=1e-9)
+        emb = sum_embeddings / sum_mask
+        
+        emb = F.normalize(emb, p=2, dim=1)
+        return emb[0].cpu().float().tolist()
+
+    def _dense_search(self, query: str, top_k: int = DENSE_TOP_K) -> list[dict]:
+        # Prefix removed to match index
+        query_emb = self._encode_query(query)
         results = self.collection.query(
             query_embeddings=[query_emb],
             n_results=top_k,
-            include=["documents", "metadatas", "distances"],
+            include=["documents", "metadatas"],
         )
         hits = []
         for i, doc_id in enumerate(results["ids"][0]):
@@ -75,12 +82,9 @@ class HybridRetriever:
             })
         return hits
 
-    # ── Sparse retrieval ──────────────────────────────────────────────────────
     def _bm25_search(self, query: str, top_k: int = BM25_TOP_K) -> list[dict]:
-        # Use underthesea to join Vietnamese compound words with underscores
         tokenised_query = word_tokenize(query.lower(), format="text").split()
         scores = self.bm25.get_scores(tokenised_query)
-
         top_indices = np.argsort(scores)[::-1][:top_k]
 
         hits = []
@@ -93,14 +97,7 @@ class HybridRetriever:
             })
         return hits
 
-    # ── RRF fusion ────────────────────────────────────────────────────────────
-    def _rrf_fusion(
-        self,
-        dense_hits: list[dict],
-        bm25_hits: list[dict],
-        k: int = RRF_K,
-        top_k: int = HYBRID_TOP_K,
-    ) -> list[dict]:
+    def _rrf_fusion(self, dense_hits: list[dict], bm25_hits: list[dict], k: int = RRF_K, top_k: int = HYBRID_TOP_K) -> list[dict]:
         scores: dict[str, float] = {}
         doc_store: dict[str, dict] = {}
 
@@ -115,26 +112,34 @@ class HybridRetriever:
             doc_store.setdefault(cid, hit)
 
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
-        results = []
+        
+        # Token length safety check before returning candidates for reranking
+        safe_candidates = []
         for rank, (cid, rrf_score) in enumerate(ranked):
             entry = dict(doc_store[cid])
+            if len(entry["text"].split()) > 600:
+                continue
             entry["rrf_score"] = rrf_score
-            entry["hybrid_rank"] = rank + 1
-            results.append(entry)
-        return results
+            entry["hybrid_rank"] = len(safe_candidates) + 1
+            safe_candidates.append(entry)
+            
+        return safe_candidates
 
-    # ── Cross-Encoder reranking ───────────────────────────────────────────────
     def _rerank(self, query: str, candidates: list[dict], top_k: int = RERANK_TOP_K) -> list[dict]:
+        if not candidates:
+            return []
+            
         pairs = [(query, c["text"]) for c in candidates]
-        scores = self.reranker.predict(pairs)
+        scores = self.reranker.predict(pairs, batch_size=8, show_progress_bar=False)
+        
         for i, score in enumerate(scores):
             candidates[i]["rerank_score"] = float(score)
+            
         reranked = sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)[:top_k]
         for rank, doc in enumerate(reranked):
             doc["final_rank"] = rank + 1
         return reranked
 
-    # ── Public API ────────────────────────────────────────────────────────────
     def retrieve(self, query: str) -> list[dict]:
         dense_hits = self._dense_search(query)
         bm25_hits  = self._bm25_search(query)

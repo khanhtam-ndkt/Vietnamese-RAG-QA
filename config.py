@@ -31,7 +31,7 @@ RRF_K = 60              # RRF constant (standard = 60)
 HYBRID_TOP_K = 50       # final candidates passed to reranker
 
 # ── Cross-Encoder Reranker ────────────────────────────────────────────────────
-RERANKER_MODEL = "BAAI/bge-reranker-base"  # Changed from English ms-marco
+RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"  # Changed from English ms-marco
 RERANKER_DEVICE = "cuda"
 RERANK_TOP_K = 10
 

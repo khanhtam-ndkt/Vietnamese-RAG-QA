@@ -3,7 +3,7 @@
 This project implements a Retrieval-Augmented Generation (RAG) system, focusing on efficient indexing, retrieval, and robust evaluation metrics to ensure high-quality output.
 
 **Stack:** Python · ChromaDB · BM25 · RRF · Cross-Encoder · Ollama · Flask · Streamlit  
-**Dataset:** UIT-ViQuAD 2.0
+**Dataset:** UIT-ViQuAD 2.0  
 **Targets:** Recall@10 ≥ 0.9, nDCG@10 ≥ 0.9
 
 ---
@@ -28,7 +28,7 @@ vietnamese-rag/
 ├── scripts/
 │   ├── 01_prepare_data.py     # Download & chunk ViQuAD2.0
 │   ├── 02_build_index.py      # Build ChromaDB + BM25 index
-│   └── 03_evaluate.py         # Eval Recall@5 / nDCG@5
+│   └── 03_evaluate.py         # Eval Recall@10 / nDCG@10
 ├── retrieval/
 │   └── retriever.py           # HybridRetriever class
 ├── generation/
@@ -97,6 +97,7 @@ Opens at `http://localhost:8501`
 # With API running:
 python scripts/03_evaluate.py
 ```
+> **Note:** the full evaluation (n=2653) was run on Kaggle rather than locally — see [Execution Notes](#execution-notes) below.
 
 ---
 
@@ -119,8 +120,21 @@ curl http://localhost:5000/health
 
 ---
 
-## 4GB VRAM Notes
-Due to the computational intensity of the evaluation process, this project is optimized to run on **Kaggle**. Local execution was found to be prohibitively slow for the current scale of the dataset.
+## Execution Notes
+
+All core components — indexing, the Flask API, and the Streamlit UI — run locally without issue (CPU-only, ~2.5GB VRAM for the LLM via Ollama).
+
+The **full metric evaluation** (`03_evaluate.py`), however, was run on **Kaggle** (see `notebook\viet-rag-03-eval.ipynb`) rather than locally. Evaluating ~2,653 samples requires sending that many sequential requests through the retrieval (and generation) pipeline, which made it prohibitively slow on local hardware. Kaggle's resources were used instead to complete the full-scale evaluation in a practical timeframe.
+
+| Component | Runs locally? | Notes |
+|---|---|---|
+| `01_prepare_data.py` | ✅ Yes | CPU only |
+| `02_build_index.py` | ✅ Yes | CPU, ~20-30 min embedding |
+| `api/app.py` (Flask) | ✅ Yes | CPU + ~2.5GB VRAM for Ollama LLM |
+| `ui/app.py` (Streamlit) | ✅ Yes | — |
+| `03_evaluate.py` (full n=2653) | ⚠️ Ran on Kaggle | Too slow locally at this scale |
+
+### Component VRAM Usage
 
 | Component | Runs on | VRAM used |
 |---|---|---|
@@ -140,5 +154,5 @@ Edit `config.py` to adjust:
 - `OLLAMA_MODEL` — swap LLM if needed
 
 ## Future Improvements
-- **nDCG Optimization**: Investigate re-ranking strategies or alternative embedding models to close the gap between the current score (0.8632) and the target (0.8920).
+- **nDCG Optimization**: Investigate re-ranking strategies or alternative embedding models to close the gap between the current score (0.8632) and the target (0.9).
 - **Failure Analysis**: Analyze the 219 logged failures to identify patterns and potential edge cases in the retrieval pipeline.

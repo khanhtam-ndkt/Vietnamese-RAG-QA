@@ -1,9 +1,11 @@
+# Python version: 3.11
 # Core RAG stack
 chromadb==0.5.23
 rank_bm25==0.2.2
 sentence-transformers==3.0.1
 transformers==4.44.2
 torch==2.4.0
+underthesea>=9.5.0
 
 # Reranking
 # cross-encoder via sentence-transformers (already included above)
