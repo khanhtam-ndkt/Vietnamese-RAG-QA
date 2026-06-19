@@ -1,0 +1,26 @@
+# Core RAG stack
+chromadb==0.5.23
+rank_bm25==0.2.2
+sentence-transformers==3.0.1
+transformers==4.44.2
+torch==2.4.0
+
+# Reranking
+# cross-encoder via sentence-transformers (already included above)
+
+# LLM via Ollama
+ollama==0.3.3
+
+# API & UI
+flask==3.0.3
+streamlit==1.38.0
+
+# Data & utils
+datasets==2.21.0   # for loading UIT-ViQuAD from HuggingFace
+tqdm==4.66.5
+numpy==1.26.4
+pandas==2.2.2
+python-dotenv==1.0.1
+
+# Evaluation
+pytrec_eval-terrier==0.5.6  # nDCG@5, Recall@5

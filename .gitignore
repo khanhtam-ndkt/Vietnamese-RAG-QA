@@ -1,0 +1,21 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data and database files
+data/bm25_index.pkl
+chroma_db/
+
+# IDE/Editor settings (VS Code)
+.vscode/
+.idea/
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+data/failures.json
+
+# Virtual environments
+rag311/
